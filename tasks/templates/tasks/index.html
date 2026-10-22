@@ -1,0 +1,252 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuickTask</title>
+    <style>
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f4f7fb;
+            color: #1f2937;
+        }
+
+        .container {
+            max-width: 700px;
+            margin: 60px auto;
+            padding: 24px;
+        }
+
+        h1 { margin-bottom: 8px; }
+        .subtitle { color: #64748b; margin-bottom: 28px; }
+
+        .panel {
+            background: white;
+            padding: 24px;
+            border-radius: 14px;
+            box-shadow: 0 4px 18px #0000000a;
+        }
+
+        .form {
+            display: flex;
+            gap: 10px;
+        }
+
+        input {
+            flex: 1;
+            min-width: 0;
+            padding: 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            font-size: 15px;
+        }
+
+        button {
+            padding: 12px 16px;
+            border: 0;
+            border-radius: 8px;
+            background: #2563eb;
+            color: white;
+            cursor: pointer;
+        }
+
+        button:disabled { opacity: 0.6; cursor: wait; }
+
+        .task {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .task:last-child { border-bottom: 0; }
+        .task input { flex: none; width: 18px; height: 18px; }
+        .task-title { flex: 1; overflow-wrap: anywhere; }
+        .completed { color: #94a3b8; text-decoration: line-through; }
+        .message { margin: 14px 0; font-size: 14px; }
+        .error { color: #dc2626; }
+        .success { color: #15803d; }
+        .muted { color: #64748b; }
+
+        @media (max-width: 500px) {
+            .container { margin: 20px auto; padding: 16px; }
+            .form { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <main class="container">
+        <h1>QuickTask</h1>
+        <p class="subtitle">Keep track of what needs to get done.</p>
+
+        <section class="panel">
+            <form id="task-form" class="form">
+                <input id="title" type="text"
+                       maxlength="200"
+                       placeholder="What needs to be done?"
+                       required>
+                <button id="add-button" type="submit">Add task</button>
+            </form>
+
+            <p id="message" class="message" role="status"></p>
+
+            <div style="display:flex; justify-content:space-between;
+                        align-items:center; margin:20px 0 8px;">
+                <h2 style="font-size:18px;">Your tasks</h2>
+                <button id="refresh-button" type="button">Refresh</button>
+            </div>
+
+            <div id="task-list" aria-live="polite">
+                <p class="muted">Loading tasks...</p>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const API_URL = "/api/tasks/";
+
+        const form = document.getElementById("task-form");
+        const titleInput = document.getElementById("title");
+        const taskList = document.getElementById("task-list");
+        const message = document.getElementById("message");
+        const addButton = document.getElementById("add-button");
+
+        function showMessage(text, type = "") {
+            message.textContent = text;
+            message.className = "message " + type;
+        }
+
+        async function loadTasks() {
+            taskList.replaceChildren();
+
+            const loading = document.createElement("p");
+            loading.textContent = "Loading tasks...";
+            taskList.appendChild(loading);
+
+            try {
+                const response = await fetch(API_URL);
+
+                if (!response.ok) {
+                    throw new Error("Could not load tasks.");
+                }
+
+                const tasks = await response.json();
+                taskList.replaceChildren();
+
+                if (tasks.length === 0) {
+                    const empty = document.createElement("p");
+                    empty.className = "muted";
+                    empty.textContent = "No tasks yet. Add your first task!";
+                    taskList.appendChild(empty);
+                    return;
+                }
+
+                tasks.forEach(task => {
+                    const row = document.createElement("div");
+                    row.className = "task";
+
+                    const checkbox = document.createElement("input");
+                    checkbox.type = "checkbox";
+                    checkbox.checked = task.completed;
+                    checkbox.setAttribute(
+                        "aria-label", "Complete " + task.title
+                    );
+
+                    const title = document.createElement("span");
+                    title.className = "task-title" +
+                        (task.completed ? " completed" : "");
+                    title.textContent = task.title;
+
+                    checkbox.addEventListener("change", async () => {
+                        checkbox.disabled = true;
+
+                        try {
+                            const result = await fetch(
+                                API_URL + task.id + "/",
+                                {
+                                    method: "PATCH",
+                                    headers: {
+                                        "Content-Type": "application/json"
+                                    },
+                                    body: JSON.stringify({
+                                        completed: checkbox.checked
+                                    })
+                                }
+                            );
+
+                            if (!result.ok) {
+                                throw new Error("Update failed.");
+                            }
+
+                            showMessage("Task updated.", "success");
+                            await loadTasks();
+                        } catch (error) {
+                            showMessage(error.message, "error");
+                            await loadTasks();
+                        }
+                    });
+
+                    row.append(checkbox, title);
+                    taskList.appendChild(row);
+                });
+            } catch (error) {
+                taskList.replaceChildren();
+                const errorText = document.createElement("p");
+                errorText.className = "error";
+                errorText.textContent =
+                    "Unable to load tasks. Please try refreshing.";
+                taskList.appendChild(errorText);
+            }
+        }
+
+        form.addEventListener("submit", async event => {
+            event.preventDefault();
+
+            const title = titleInput.value.trim();
+
+            if (!title) {
+                showMessage("Please enter a task title.", "error");
+                return;
+            }
+
+            addButton.disabled = true;
+
+            try {
+                const response = await fetch(API_URL, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ title })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    const detail = data.title?.[0] ||
+                        data.detail || "Could not create task.";
+                    throw new Error(detail);
+                }
+
+                titleInput.value = "";
+                showMessage("Task added successfully!", "success");
+                await loadTasks();
+            } catch (error) {
+                showMessage(error.message, "error");
+            } finally {
+                addButton.disabled = false;
+            }
+        });
+
+        document.getElementById("refresh-button")
+            .addEventListener("click", loadTasks);
+
+        loadTasks();
+    </script>
+</body>
+</html>
